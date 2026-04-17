@@ -17,8 +17,9 @@ This takes ~0.9 seconds and does the following:
 - Detects CPU architecture (`x86_64` or `aarch64`) and restores the right binary:
   - **x86_64**: copies the standalone ELF binary to `~/.local/share/claude/`
   - **aarch64**: copies the ARM64 Node.js binary to `/tmp/` and extracts the claude-code package, then writes a wrapper script at `~/.local/bin/claude`
-- Restores your OAuth credentials from `/Workspace/Users/tanishq.maheshwari@databricks.com/.claude-persist/.credentials.json`
+- **Symlinks** your OAuth credentials from `~/.claude/.credentials.json` → `/Workspace/Users/tanishq.maheshwari@databricks.com/.claude-persist/.credentials.json` (so token refreshes write directly to persistent storage — no manual re-save needed)
 - Restores your settings files
+- **Symlinks** `~/.claude/plugins/` → `/Workspace/Users/tanishq.maheshwari@databricks.com/.claude/plugins/` (plugins persist automatically)
 - Symlinks Claude Code memory to the persistent directory at `/Workspace/Users/tanishq.maheshwari@databricks.com/.claude/memory/`
 - Adds `~/.local/bin` to your `PATH`
 
@@ -56,11 +57,13 @@ source /Workspace/Shared/.claude-code/setup.sh save
 
 ### Claude starts but asks you to authenticate
 
-Your cached credentials have expired. Authenticate in the browser when prompted, then save the new credentials:
+This should now be rare — credentials are symlinked directly to persistent storage, so OAuth token refreshes survive session restarts automatically.
+
+If it does happen (e.g. the refresh token itself expired after a long period of inactivity), authenticate in the browser when prompted, then save:
 
 ```bash
 claude                                              # authenticate
-source /Workspace/Shared/.claude-code/setup.sh save # cache new credentials
+source /Workspace/Shared/.claude-code/setup.sh save # persist the new credentials
 ```
 
 ### "command not found: claude" after running setup.sh
@@ -105,6 +108,7 @@ Shows the cached version, whether your credentials are saved, and whether Claude
 | arm64 claude-code package | `/Workspace/Shared/.claude-code/arm64/versions/2.1.112.tar.gz` | Yes — all users |
 | Your OAuth credentials | `/Workspace/Users/tanishq.maheshwari@databricks.com/.claude-persist/.credentials.json` | No — private |
 | Your settings | `/Workspace/Users/tanishq.maheshwari@databricks.com/.claude-persist/settings*.json` | No — private |
+| Claude Code plugins | `/Workspace/Users/tanishq.maheshwari@databricks.com/.claude/plugins/` | No — private |
 | Claude Code memory | `/Workspace/Users/tanishq.maheshwari@databricks.com/.claude/memory/` | No — private |
 | CLAUDE.md (project context) | `/Workspace/Users/tanishq.maheshwari@databricks.com/CLAUDE.md` | No — private |
 

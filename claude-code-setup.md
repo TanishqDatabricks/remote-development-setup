@@ -1,6 +1,8 @@
 # Claude Code Setup — New SSH Session Quickstart
 
-Every time you start a new Databricks serverless SSH session, the home directory is wiped. Claude Code, its credentials, and your memory files must be restored. Everything is already cached on Workspace from our previous session — you just need to run one command.
+Every time you start a new Databricks serverless SSH session, the home directory is wiped. Claude Code, its credentials, and your memory files must be restored. Everything is already cached on Workspace — you just need to run one command.
+
+> **Note (Apr 2026):** Databricks serverless compute switched to aarch64 (ARM64). The setup script handles this automatically — no change to the workflow below.
 
 ---
 
@@ -10,9 +12,11 @@ Every time you start a new Databricks serverless SSH session, the home directory
 source /Workspace/Shared/.claude-code/setup.sh
 ```
 
-This takes ~0.6 seconds and does the following:
+This takes ~0.9 seconds and does the following:
 - Detects your identity from `/Workspace/.proc/self/git/config`
-- Copies the Claude Code binary (v2.1.110, 224MB) from `/Workspace/Shared/.claude-code/versions/` to `~/.local/share/claude/`
+- Detects CPU architecture (`x86_64` or `aarch64`) and restores the right binary:
+  - **x86_64**: copies the standalone ELF binary to `~/.local/share/claude/`
+  - **aarch64**: copies the ARM64 Node.js binary to `/tmp/` and extracts the claude-code package, then writes a wrapper script at `~/.local/bin/claude`
 - Restores your OAuth credentials from `/Workspace/Users/tanishq.maheshwari@databricks.com/.claude-persist/.credentials.json`
 - Restores your settings files
 - Symlinks Claude Code memory to the persistent directory at `/Workspace/Users/tanishq.maheshwari@databricks.com/.claude/memory/`
@@ -30,12 +34,23 @@ That's it. You're authenticated and ready.
 
 ## If something goes wrong
 
-### "No cached version found"
+### "Exec format error" when running claude
 
-The shared binary cache is missing. Reinstall and re-cache:
+The cached binary is the wrong architecture for this machine (e.g. an x86_64 binary on an arm64 node). Run:
 
 ```bash
-npm install -g @anthropic-ai/claude-code
+source /Workspace/Shared/.claude-code/setup.sh install
+source /Workspace/Shared/.claude-code/setup.sh save
+```
+
+This triggers a fresh install using the right architecture and updates the shared cache.
+
+### "No cached version found"
+
+The shared cache is missing. Trigger a fresh install:
+
+```bash
+source /Workspace/Shared/.claude-code/setup.sh install
 source /Workspace/Shared/.claude-code/setup.sh save
 ```
 
@@ -85,7 +100,9 @@ Shows the cached version, whether your credentials are saved, and whether Claude
 | What | Path | Shared? |
 |---|---|---|
 | Setup script | `/Workspace/Shared/.claude-code/setup.sh` | Yes — all users |
-| Binary cache | `/Workspace/Shared/.claude-code/versions/2.1.110` | Yes — all users |
+| x86_64 binary cache | `/Workspace/Shared/.claude-code/versions/2.1.112` | Yes — all users |
+| arm64 Node.js binary | `/Workspace/Shared/.claude-code/arm64/node` | Yes — all users |
+| arm64 claude-code package | `/Workspace/Shared/.claude-code/arm64/versions/2.1.112.tar.gz` | Yes — all users |
 | Your OAuth credentials | `/Workspace/Users/tanishq.maheshwari@databricks.com/.claude-persist/.credentials.json` | No — private |
 | Your settings | `/Workspace/Users/tanishq.maheshwari@databricks.com/.claude-persist/settings*.json` | No — private |
 | Claude Code memory | `/Workspace/Users/tanishq.maheshwari@databricks.com/.claude/memory/` | No — private |

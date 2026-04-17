@@ -4,27 +4,48 @@ This directory contains the multi-user Claude Code persistence layer for Databri
 
 ## Problem
 
-Databricks serverless compute is ephemeral. The home directory (`/home/spark-*`) is an overlay filesystem wiped on every restart. Claude Code (~224MB binary), its OAuth credentials, and settings must be reinstalled and re-authenticated each session.
+Databricks serverless compute is ephemeral. The home directory (`/home/spark-*`) is an overlay filesystem wiped on every restart. Claude Code, its OAuth credentials, and settings must be reinstalled and re-authenticated each session.
+
+An additional complication: as of April 2026, Databricks serverless switched to **aarch64 (ARM64)** hardware. The pre-installed Node.js at `/usr/local/bin/node` and the pre-built Claude Code standalone binary are both x86_64, causing "Exec format error" on ARM64 nodes.
 
 ## Solution
 
-Cache the binary in a shared Workspace location and credentials in each user's private Workspace directory. Restore takes ~0.6 seconds with no internet required.
+Cache both x86_64 and arm64 artifacts in shared Workspace storage; credentials in each user's private Workspace directory. Restore takes ~0.9 seconds with no internet required on either architecture.
 
 ## Directory structure
 
 ```
-/Workspace/Shared/.claude-code/          # THIS DIRECTORY — shared, all users
-├── CLAUDE.md                            # This file
-├── setup.sh                             # The setup script
-├── current_version                      # e.g., "2.1.110"
-└── versions/
-    └── <version>                        # ELF binary (~224MB)
+/Workspace/Shared/.claude-code/              # Shared, all users
+├── setup.sh                                 # The setup script
+├── current_version                          # e.g., "2.1.112"  (x86_64)
+├── versions/
+│   └── <version>                            # x86_64 standalone ELF binary (~224MB)
+└── arm64/
+    ├── current_version                      # e.g., "2.1.112"  (arm64)
+    ├── node                                 # ARM64 Node.js v22.14.0 binary (~110MB)
+    └── versions/
+        └── <version>.tar.gz                 # arm64 claude-code npm package (~27MB compressed)
 
-/Workspace/Users/<email>/.claude-persist/  # Per-user, private
-├── .credentials.json                      # OAuth access + refresh tokens
-├── settings.json                          # Claude Code settings
-└── settings.local.json                    # Local overrides
+/Workspace/Users/<email>/.claude-persist/    # Per-user, private
+├── .credentials.json                        # OAuth access + refresh tokens
+├── settings.json                            # Claude Code settings
+└── settings.local.json                      # Local overrides
 ```
+
+### Why arm64 uses a different approach
+
+The Claude Code release binary is x86_64-only. On arm64, `@anthropic-ai/claude-code` is a Node.js package (JavaScript), so it requires a working Node.js to run. The pre-installed Node.js on Databricks is also x86_64. The setup script:
+
+1. Caches an arm64 Node.js binary in shared storage (downloaded from nodejs.org once)
+2. Caches the claude-code npm package as a tarball in shared storage
+3. On restore: copies node to `/tmp/claude-arm64-node`, extracts the package to `/tmp/claude-arm64-pkg/`, and writes a wrapper at `~/.local/bin/claude`:
+
+```bash
+#!/bin/bash
+exec "/tmp/claude-arm64-node" "/tmp/claude-arm64-pkg/cli.js" "$@"
+```
+
+Using `/tmp` (not Workspace FUSE) avoids symlink/permission issues with the FUSE filesystem during extraction.
 
 ## Usage
 

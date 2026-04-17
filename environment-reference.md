@@ -21,10 +21,12 @@ Anything installed via `apt`, `npm install -g`, `pip install`, or written to `$H
 ### What's pre-installed
 
 - Python 3 (Databricks runtime)
-- Node.js v22.9.0 at `/usr/local/bin/node`
+- Node.js v22.9.0 at `/usr/local/bin/node` — **x86_64 only**; unusable on arm64 nodes
 - Databricks CLI at `$DATABRICKS_CLI_PATH`
 - Git (configured via `/Workspace/.proc/self/git/config`)
 - Spark, Java, conda, mlflow
+
+> **arm64 note (Apr 2026):** Serverless compute switched to aarch64. The pre-installed Node.js and Claude Code binary are both x86_64 and will fail with "Exec format error". Use `source /Workspace/Shared/.claude-code/setup.sh` which handles this automatically. A working arm64 Node.js v22.14.0 is cached at `/Workspace/Shared/.claude-code/arm64/node`.
 
 ### Available environment variables
 
@@ -47,8 +49,10 @@ Claude Code and its auth credentials are persisted across ephemeral sessions usi
 ### Shared (all users)
 
 - **Script**: `/Workspace/Shared/.claude-code/setup.sh`
-- **Binary cache**: `/Workspace/Shared/.claude-code/versions/<version>`
-- Restore time: ~0.6 seconds
+- **x86_64 binary cache**: `/Workspace/Shared/.claude-code/versions/<version>`
+- **arm64 Node.js binary**: `/Workspace/Shared/.claude-code/arm64/node`
+- **arm64 package cache**: `/Workspace/Shared/.claude-code/arm64/versions/<version>.tar.gz`
+- Restore time: ~0.9 seconds (both architectures)
 
 ### Per-user (your private data)
 

@@ -17,7 +17,7 @@ This takes ~0.9 seconds and does the following:
 - Detects CPU architecture (`x86_64` or `aarch64`) and restores the right binary:
   - **x86_64**: copies the standalone ELF binary to `~/.local/share/claude/`
   - **aarch64**: copies the ARM64 Node.js binary to `/tmp/` and extracts the claude-code package, then writes a wrapper script at `~/.local/bin/claude`
-- **Symlinks** your OAuth credentials from `~/.claude/.credentials.json` → `/Workspace/Users/tanishq.maheshwari@databricks.com/.claude-persist/.credentials.json` (so token refreshes write directly to persistent storage — no manual re-save needed)
+- **Restores** your OAuth credentials from persistent storage to `~/.claude/.credentials.json`. The `claude` wrapper script syncs credentials back on exit, so token refreshes are automatically persisted (no manual re-save needed)
 - Restores your settings files
 - **Symlinks** `~/.claude/plugins/` → `/Workspace/Users/tanishq.maheshwari@databricks.com/.claude/plugins/` (plugins persist automatically)
 - Symlinks Claude Code memory to the persistent directory at `/Workspace/Users/tanishq.maheshwari@databricks.com/.claude/memory/`
@@ -57,9 +57,9 @@ source /Workspace/Shared/.claude-code/setup.sh save
 
 ### Claude starts but asks you to authenticate
 
-This should now be rare — credentials are symlinked directly to persistent storage, so OAuth token refreshes survive session restarts automatically.
+This should now be rare — the `claude` wrapper script auto-syncs credentials to persistent storage on exit, so token refreshes survive session restarts.
 
-If it does happen (e.g. the refresh token itself expired after a long period of inactivity), authenticate in the browser when prompted, then save:
+If it does happen (e.g. you killed the last session without a clean exit, or the refresh token expired), authenticate in the browser when prompted, then save:
 
 ```bash
 claude                                              # authenticate
@@ -114,31 +114,28 @@ Shows the cached version, whether your credentials are saved, and whether Claude
 
 ---
 
-## Optional: combine with Python venv activation
+## MCP Servers
 
-If you have a persistent Python venv on Workspace (see `persisting-python-environments.md`), you can do both in one go:
+MCP server configuration lives in `~/.claude.json`, which is wiped every session. Use `setup-extensions.py` to reapply it each time.
+
+### First-time setup
+
+Copy the script to your persistent Workspace directory and edit the `MCP_SERVERS` dict:
+
+```bash
+cp /path/to/remote-development-setup/setup-extensions.py \
+   /Workspace/Users/<your-email>/setup-extensions.py
+```
+
+The script ships with the Databricks SQL MCP pre-configured. It auto-detects your workspace URL and session token from `$DATABRICKS_HOST` and `$DATABRICKS_TOKEN`, so no hardcoding needed.
+
+### Each session
+
+Run it after `setup.sh`:
 
 ```bash
 source /Workspace/Shared/.claude-code/setup.sh
-cd /Workspace/Users/tanishq.maheshwari@databricks.com/my-project
-source .venv/bin/activate
-claude
+python3 /Workspace/Users/<your-email>/setup-extensions.py
 ```
 
-Or create a personal init script at `/Workspace/Users/tanishq.maheshwari@databricks.com/init.sh`:
-
-```bash
-#!/bin/bash
-source /Workspace/Shared/.claude-code/setup.sh
-export UV_LINK_MODE=copy
-
-# Activate a project venv if you have one:
-# cd /Workspace/Users/tanishq.maheshwari@databricks.com/my-project
-# source .venv/bin/activate
-```
-
-Then every session is just:
-
-```bash
-source /Workspace/Users/tanishq.maheshwari@databricks.com/init.sh
-```
+Then restart Claude Code if any MC

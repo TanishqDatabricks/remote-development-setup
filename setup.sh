@@ -94,13 +94,14 @@ restore_credentials() {
     local user_dir="$1"
     mkdir -p "${CLAUDE_CONFIG_DIR}"
 
-    # Symlink credentials so token refreshes by Claude Code write through to
-    # persistent storage automatically — no manual re-save needed.
+    # Copy (not symlink) because Claude Code does atomic rename on token refresh,
+    # which would break a symlink and leave persistent storage with stale tokens.
+    # The claude wrapper script syncs credentials back on exit instead.
     local persist_creds="${user_dir}/.credentials.json"
     if [ -f "$persist_creds" ]; then
-        log "Linking credentials to persistent storage..."
-        rm -f "${CLAUDE_CONFIG_DIR}/.credentials.json"
-        ln -sf "$persist_creds" "${CLAUDE_CONFIG_DIR}/.credentials.json"
+        log "Restoring credentials..."
+        cp "$persist_creds" "${CLAUDE_CONFIG_DIR}/.credentials.json"
+        chmod 600 "${CLAUDE_CONFIG_DIR}/.credentials.json"
     else
         warn "No saved credentials. Run 'claude' to authenticate, then:"
         warn "  source /Workspace/Shared/.claude-code/setup.sh save"
@@ -156,6 +157,7 @@ save_credentials() {
 # =============================================================================
 
 restore_x86() {
+    local persist_creds="${1:-}"
     local version="" binary_source=""
 
     if [ -f "${SHARED_DIR}/current_version" ]; then
@@ -172,7 +174,7 @@ restore_x86() {
     mkdir -p "${CLAUDE_LOCAL_DIR}/versions" "${CLAUDE_BIN_DIR}"
     cp "$binary_source" "${CLAUDE_LOCAL_DIR}/versions/${version}"
     chmod +x "${CLAUDE_LOCAL_DIR}/versions/${version}"
-    ln -sf "${CLAUDE_LOCAL_DIR}/versions/${version}" "${CLAUDE_BIN_DIR}/claude"
+    write_x86_wrapper "${CLAUDE_LOCAL_DIR}/versions/${version}" "$persist_creds"
     ensure_path
     log "Ready! Claude Code v${version}"
 }
@@ -185,6 +187,7 @@ install_fresh_x86() {
 }
 
 save_x86() {
+    local persist_creds="${1:-}"
     local binary_link="${CLAUDE_BIN_DIR}/claude"
     [ -f "$binary_link" ] || [ -L "$binary_link" ] || die "Claude not found at ${binary_link}."
     local binary_target version
@@ -195,7 +198,36 @@ save_x86() {
     mkdir -p "${SHARED_DIR}/versions"
     [ -f "${SHARED_DIR}/versions/${version}" ] || cp "$binary_target" "${SHARED_DIR}/versions/${version}"
     echo "$version" > "${SHARED_DIR}/current_version"
+    [ -n "$persist_creds" ] && write_x86_wrapper "$binary_target" "$persist_creds"
     log "Shared x86_64 cache updated (v${version})."
+}
+
+write_x86_wrapper() {
+    local binary_path="$1" persist_creds="$2"
+    mkdir -p "${CLAUDE_BIN_DIR}"
+    local tmp_wrapper
+    tmp_wrapper=$(mktemp "${CLAUDE_BIN_DIR}/.claude-XXXXXX")
+    cat > "$tmp_wrapper" << EOF
+#!/bin/bash
+_creds="\${HOME}/.claude/.credentials.json"
+_persist="${persist_creds}"
+_sync_creds() { [ -f "\$_creds" ] && cp "\$_creds" "\$_persist" 2>/dev/null || true; }
+_watch_creds() {
+    local last=0 mtime
+    while true; do
+        sleep 3
+        mtime=\$(stat -c %Y "\$_creds" 2>/dev/null || echo 0)
+        [ "\$mtime" -gt "\$last" ] && { _sync_creds; last=\$mtime; }
+    done
+}
+_watch_creds &
+_WATCHER=\$!
+trap "kill \$_WATCHER 2>/dev/null; wait \$_WATCHER 2>/dev/null; _sync_creds" EXIT
+"${binary_path}" "\$@"
+exit \$?
+EOF
+    chmod +x "$tmp_wrapper"
+    mv -f "$tmp_wrapper" "${CLAUDE_BIN_DIR}/claude"
 }
 
 # =============================================================================
@@ -213,6 +245,7 @@ save_x86() {
 #   ~/.local/bin/claude               — wrapper: exec node pkg/cli.js "$@"
 
 restore_arm64() {
+    local persist_creds="${1:-}"
     local version=""
     [ -f "${ARM64_CACHE}/current_version" ] && version=$(cat "${ARM64_CACHE}/current_version")
 
@@ -220,26 +253,30 @@ restore_arm64() {
        [ ! -f "${ARM64_CACHE}/versions/${version}.tar.gz" ] || \
        [ ! -f "${ARM64_NODE_CACHE}" ]; then
         log "No arm64 cache found. Installing fresh (~2 min first time)..."
-        install_fresh_arm64; return
+        install_fresh_arm64 "$persist_creds"; return
     fi
 
     log "Restoring arm64 v${version}..."
 
-    # Restore node to /tmp (fast local copy)
-    cp "${ARM64_NODE_CACHE}" "${ARM64_TMP_NODE}"
-    chmod +x "${ARM64_TMP_NODE}"
+    # Restore node to /tmp (fast local copy); skip if binary is currently in use
+    if ! cp "${ARM64_NODE_CACHE}" "${ARM64_TMP_NODE}" 2>/dev/null; then
+        [ -x "${ARM64_TMP_NODE}" ] || { warn "Could not restore node binary."; return 1; }
+    else
+        chmod +x "${ARM64_TMP_NODE}"
+    fi
 
     # Extract claude-code package to /tmp (tar.gz contains package contents, not directory)
     rm -rf "${ARM64_TMP_PKG}"
     mkdir -p "${ARM64_TMP_PKG}"
     tar -xzf "${ARM64_CACHE}/versions/${version}.tar.gz" -C "${ARM64_TMP_PKG}"
 
-    write_arm64_wrapper "${ARM64_TMP_NODE}" "${ARM64_TMP_PKG}/cli.js"
+    write_arm64_wrapper "${ARM64_TMP_NODE}" "${ARM64_TMP_PKG}/cli.js" "$persist_creds"
     ensure_path
     log "Ready! Claude Code v${version} (arm64)"
 }
 
 install_fresh_arm64() {
+    local persist_creds="${1:-}"
     local tmp_install
     tmp_install=$(mktemp -d /tmp/claude-arm64-install-XXXXXX)
 
@@ -275,7 +312,7 @@ install_fresh_arm64() {
     # Clean up full node install (only keep the binary)
     rm -rf "${tmp_install}"
 
-    write_arm64_wrapper "${ARM64_TMP_NODE}" "${ARM64_TMP_PKG}/cli.js"
+    write_arm64_wrapper "${ARM64_TMP_NODE}" "${ARM64_TMP_PKG}/cli.js" "$persist_creds"
     ensure_path
     log ""
     log "Installed! Authenticate with 'claude', then save for next session:"
@@ -283,14 +320,28 @@ install_fresh_arm64() {
 }
 
 write_arm64_wrapper() {
-    local node_path="$1" cli_path="$2"
+    local node_path="$1" cli_path="$2" persist_creds="$3"
     mkdir -p "${CLAUDE_BIN_DIR}"
-    # Overwrite atomically by writing to a temp file first (avoids "text file busy")
     local tmp_wrapper
     tmp_wrapper=$(mktemp "${CLAUDE_BIN_DIR}/.claude-XXXXXX")
     cat > "$tmp_wrapper" << EOF
 #!/bin/bash
-exec "${node_path}" "${cli_path}" "\$@"
+_creds="\${HOME}/.claude/.credentials.json"
+_persist="${persist_creds}"
+_sync_creds() { [ -f "\$_creds" ] && cp "\$_creds" "\$_persist" 2>/dev/null || true; }
+_watch_creds() {
+    local last=0 mtime
+    while true; do
+        sleep 3
+        mtime=\$(stat -c %Y "\$_creds" 2>/dev/null || echo 0)
+        [ "\$mtime" -gt "\$last" ] && { _sync_creds; last=\$mtime; }
+    done
+}
+_watch_creds &
+_WATCHER=\$!
+trap "kill \$_WATCHER 2>/dev/null; wait \$_WATCHER 2>/dev/null; _sync_creds" EXIT
+"${node_path}" "${cli_path}" "\$@"
+exit \$?
 EOF
     chmod +x "$tmp_wrapper"
     mv -f "$tmp_wrapper" "${CLAUDE_BIN_DIR}/claude"
@@ -325,17 +376,18 @@ save_arm64() {
 # =============================================================================
 
 do_restore() {
-    local email user_dir
+    local email user_dir persist_creds
     email=$(get_user_email) || return 1
     user_dir=$(get_user_persist_dir "$email")
+    persist_creds="${user_dir}/.credentials.json"
 
     log "Setting up Claude Code for ${email} (${ARCH})..."
     mkdir -p "${CLAUDE_BIN_DIR}" "${CLAUDE_LOCAL_DIR}"
 
     if [ "$ARCH" = "aarch64" ]; then
-        restore_arm64
+        restore_arm64 "$persist_creds"
     else
-        restore_x86
+        restore_x86 "$persist_creds"
     fi
 
     restore_credentials "$user_dir"
@@ -349,12 +401,13 @@ do_fresh_install() {
 }
 
 do_save() {
-    local email user_dir
+    local email user_dir persist_creds
     email=$(get_user_email) || return 1
     user_dir=$(get_user_persist_dir "$email")
+    persist_creds="${user_dir}/.credentials.json"
 
     if [ "$ARCH" = "aarch64" ]; then save_arm64
-    else save_x86; fi
+    else save_x86 "$persist_creds"; fi
 
     save_credentials "$user_dir"
     log "Saved! Next session: source /Workspace/Shared/.claude-code/setup.sh"

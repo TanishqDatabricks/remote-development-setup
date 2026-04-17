@@ -119,13 +119,14 @@ These steps bootstrap the entire system from scratch in a workspace that doesn't
 
 ### Step 1: Deploy the setup script
 
-SSH into any session on the target workspace, then:
+SSH into any session on the target workspace, then clone this repo and copy the script into the shared location:
 
 ```bash
 mkdir -p /Workspace/Shared/.claude-code
-# Copy setup.sh from this repo, another workspace, or paste it directly
-cp /path/to/setup.sh /Workspace/Shared/.claude-code/setup.sh
+git clone https://github.com/TanishqDatabricks/remote-development-setup.git /tmp/rds
+cp /tmp/rds/setup.sh /Workspace/Shared/.claude-code/setup.sh
 chmod +x /Workspace/Shared/.claude-code/setup.sh
+rm -rf /tmp/rds
 ```
 
 ### Step 2: Populate the shared binary cache

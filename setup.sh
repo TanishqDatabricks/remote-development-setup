@@ -90,6 +90,27 @@ ensure_path() {
 }
 
 # --- Credentials + settings (arch-independent) ------------------------------
+check_token_expiry() {
+    local creds_file="$1"
+    python3 - "$creds_file" <<'PYEOF' 2>/dev/null
+import json, time, sys
+try:
+    data = json.load(open(sys.argv[1]))
+    expires_at = data.get('claudeAiOauth', {}).get('expiresAt', 0)
+    now_ms = int(time.time() * 1000)
+    if not expires_at:
+        print('unknown')
+    elif expires_at < now_ms:
+        print('expired')
+    elif expires_at < now_ms + 3_600_000:
+        print('expiring_soon')
+    else:
+        print('valid')
+except Exception:
+    print('unknown')
+PYEOF
+}
+
 restore_credentials() {
     local user_dir="$1"
     mkdir -p "${CLAUDE_CONFIG_DIR}"
@@ -99,12 +120,20 @@ restore_credentials() {
     # The claude wrapper script syncs credentials back on exit instead.
     local persist_creds="${user_dir}/.credentials.json"
     if [ -f "$persist_creds" ]; then
+        local token_status
+        token_status=$(check_token_expiry "$persist_creds")
+        case "$token_status" in
+            expired)
+                warn "Saved access token is expired — Claude Code will refresh it automatically on next run."
+                warn "If re-authentication is needed, run: claude" ;;
+            expiring_soon)
+                log "Note: credentials expire within 1 hour — will auto-refresh on next claude run." ;;
+        esac
         log "Restoring credentials..."
         cp "$persist_creds" "${CLAUDE_CONFIG_DIR}/.credentials.json"
         chmod 600 "${CLAUDE_CONFIG_DIR}/.credentials.json"
     else
-        warn "No saved credentials. Run 'claude' to authenticate, then:"
-        warn "  source /Workspace/Shared/.claude-code/setup.sh save"
+        warn "No saved credentials. Run 'claude' to authenticate (credentials will save automatically)."
     fi
 
     for f in settings.json settings.local.json; do

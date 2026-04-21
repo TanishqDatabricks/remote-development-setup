@@ -17,7 +17,15 @@ This takes ~0.9 seconds and does the following:
 - Detects CPU architecture (`x86_64` or `aarch64`) and restores the right binary:
   - **x86_64**: copies the standalone ELF binary to `~/.local/share/claude/`
   - **aarch64**: copies the ARM64 Node.js binary to `/tmp/` and extracts the claude-code package, then writes a wrapper script at `~/.local/bin/claude`
-- **Restores** your OAuth credentials from persistent storage to `~/.claude/.credentials.json`. The `claude` wrapper script syncs credentials back on exit, so token refreshes are automatically persisted (no manual re-save needed)
+- **Restores** your OAuth credentials from `/Workspace/Users/tanishq.maheshwari@databricks.com/.claude-persist/.credentials.json` → `~/.claude/.credentials.json`, with an expiry check:
+  - If the access token is **expired**: a warning is printed, but the file is still copied — Claude Code will use the refresh token to get a new access token automatically on first API call
+  - If the access token expires **within 1 hour**: a note is logged
+  - The access token lifetime is ~24 hours; the refresh token is much longer-lived
+- The `claude` command is a **wrapper script** (not the raw binary) that:
+  - Spawns a background watcher polling `~/.claude/.credentials.json` every 3 seconds
+  - Syncs any changes (e.g. token refreshes) back to persistent storage immediately
+  - Forces a final sync on exit via an EXIT trap
+  - This means credentials auto-save on first auth and on every token refresh — **no manual `save` needed**
 - Restores your settings files
 - **Symlinks** `~/.claude/plugins/` → `/Workspace/Users/tanishq.maheshwari@databricks.com/.claude/plugins/` (plugins persist automatically)
 - Symlinks Claude Code memory to the persistent directory at `/Workspace/Users/tanishq.maheshwari@databricks.com/.claude/memory/`
@@ -57,13 +65,22 @@ source /Workspace/Shared/.claude-code/setup.sh save
 
 ### Claude starts but asks you to authenticate
 
-This should now be rare — the `claude` wrapper script auto-syncs credentials to persistent storage on exit, so token refreshes survive session restarts.
+This should now be rare. The wrapper's background watcher syncs token refreshes every 3 seconds and forces a final sync on exit, so credentials persist automatically across sessions.
 
-If it does happen (e.g. you killed the last session without a clean exit, or the refresh token expired), authenticate in the browser when prompted, then save:
+Common causes if it does happen:
+- **Killed session** (e.g. `kill -9`) — the EXIT trap didn't fire, so the last token refresh wasn't synced back
+- **Refresh token expired** — after a long period of inactivity (weeks/months), even the refresh token becomes invalid
+
+In either case, just authenticate when prompted — credentials will auto-save on exit:
 
 ```bash
-claude                                              # authenticate
-source /Workspace/Shared/.claude-code/setup.sh save # persist the new credentials
+claude   # authenticate in browser, then exit normally
+```
+
+If you killed the session and want to force-save immediately after re-auth:
+
+```bash
+source /Workspace/Shared/.claude-code/setup.sh save
 ```
 
 ### "command not found: claude" after running setup.sh
